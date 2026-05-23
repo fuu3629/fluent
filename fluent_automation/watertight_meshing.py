@@ -67,6 +67,8 @@ class WatertightMesher:
         """FluentをMeshingモードで起動し、Watertight workflowを開始する。"""
 
         print_color("Start Fluent Mesh")
+        run_directory = Path(self.config.run_directory).resolve()
+        run_directory.mkdir(parents=True, exist_ok=True)
         session = cast(
             MeshingSession,
             pyfluent.launch_fluent(
@@ -74,6 +76,8 @@ class WatertightMesher:
                 precision=pyfluent.Precision.DOUBLE,
                 processor_count=self.config.processor_count,
                 ui_mode="gui",
+                cwd=str(run_directory),
+                cleanup_on_exit=self.config.cleanup_on_exit,
             ),
         )
         self.meshing_session = session

@@ -1,19 +1,26 @@
-from fluent_automation.config import SolverConfig
-from fluent_automation.console import print_color
+from fluent_automation.config import GuiPauseConfig, SolverConfig
+from fluent_automation.console import pause_for_gui, print_color
 from fluent_automation.pyfluent_helpers import set_constant_value, set_state
 
 
 class SolverConfigurator:
     """Solver sessionへ物理モデル・境界条件・初期化条件を設定する。"""
 
-    def __init__(self, solver_session, config: SolverConfig):
+    def __init__(
+        self,
+        solver_session,
+        config: SolverConfig,
+        pause_config: GuiPauseConfig | None = None,
+    ):
         self.solver_session = solver_session
         self.config = config
+        self.pause_config = pause_config or GuiPauseConfig()
 
     def setup(self) -> None:
         """Meshingから切り替えたSolver sessionへ基本設定を投入する。"""
 
         print_color("Start Solver Setup")
+        self._setup_units()
         self._perform_mesh_check()
         self._setup_models()
         self._setup_materials()
@@ -21,10 +28,33 @@ class SolverConfigurator:
         self._setup_boundaries()
         print_color("End Solver Setup")
 
+        if self.pause_config.enabled and self.pause_config.before_solver_run:
+            pause_for_gui("Solver設定が完了しました。解析を開始する前にFluent GUIで確認してください。")
+
         if self.config.initialize:
             self._initialize()
 
         self._run_iterations()
+
+    def _setup_units(self) -> None:
+        """Set Unitsでlengthの表示単位を設定する。"""
+
+        if not self.config.set_length_unit:
+            return
+
+        print_color(f"Start Set Units: length -> {self.config.length_unit}")
+        try:
+            self.solver_session.settings.setup.units_settings.new_unit(
+                quantity="length",
+                units_name=self.config.length_unit,
+                scale_factor=self.config.length_unit_scale_factor,
+                offset=self.config.length_unit_offset,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to set length unit: {self.config.length_unit}"
+            ) from exc
+        print_color(f"End Set Units: length -> {self.config.length_unit}")
 
     def _perform_mesh_check(self) -> None:
         """Solver modeでmesh checkを実行する。"""
@@ -193,6 +223,7 @@ class SolverConfigurator:
         pressure_outlet = boundary_conditions.pressure_outlet[outlet.name]
         pressure_outlet_settings = getattr(pressure_outlet, "settings", pressure_outlet)
         momentum = pressure_outlet_settings.momentum
+        turbulence = pressure_outlet_settings.turbulence
         thermal = pressure_outlet_settings.thermal
 
         if outlet.gauge_pressure is not None:
@@ -200,6 +231,34 @@ class SolverConfigurator:
                 momentum.gauge_pressure,
                 outlet.gauge_pressure,
                 f"pressure_outlet[{outlet.name}].gauge_pressure",
+            )
+        if outlet.turbulence_specification is not None:
+            set_state(
+                turbulence.turbulence_specification,
+                outlet.turbulence_specification,
+                f"pressure_outlet[{outlet.name}].turbulence_specification",
+            )
+        if outlet.turbulent_intensity is not None:
+            turbulent_intensity_setting = self._first_available_setting(
+                turbulence,
+                names=("backflow_turbulent_intensity", "turbulent_intensity"),
+                label=f"pressure_outlet[{outlet.name}].turbulent_intensity",
+            )
+            set_state(
+                turbulent_intensity_setting,
+                outlet.turbulent_intensity,
+                f"pressure_outlet[{outlet.name}].turbulent_intensity",
+            )
+        if outlet.hydraulic_diameter is not None:
+            hydraulic_diameter_setting = self._first_available_setting(
+                turbulence,
+                names=("backflow_hydraulic_diameter", "hydraulic_diameter"),
+                label=f"pressure_outlet[{outlet.name}].hydraulic_diameter",
+            )
+            set_state(
+                hydraulic_diameter_setting,
+                outlet.hydraulic_diameter,
+                f"pressure_outlet[{outlet.name}].hydraulic_diameter",
             )
         if self.config.energy_enabled and outlet.backflow_temperature is not None:
             backflow_temperature_setting = self._first_available_setting(

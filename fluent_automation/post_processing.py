@@ -14,7 +14,7 @@ class PostProcessor:
         self.solver_session = solver_session
         self.solver_config = solver_config
         self.config: PostProcessingConfig = solver_config.post_processing
-        self.output_dir = Path(self.config.output_dir)
+        self.output_dir = Path(self.config.output_dir).resolve()
 
     def generate(self) -> None:
         if not self.config.enabled:
@@ -102,6 +102,7 @@ class PostProcessor:
             "",
             "## Solver Settings",
             "",
+            f"- Length unit: {self.solver_config.length_unit}",
             f"- Energy equation: {self.solver_config.energy_enabled}",
             f"- Viscous model: {self.solver_config.viscous_model}",
             f"- K-omega model: {self.solver_config.k_omega_model or 'Fluent default'}",
@@ -132,6 +133,8 @@ class PostProcessor:
                 [
                     f"- Outlet: {outlet.name}",
                     f"- Gauge pressure: {outlet.gauge_pressure} Pa",
+                    f"- Turbulence specification: {outlet.turbulence_specification}",
+                    f"- Hydraulic diameter: {outlet.hydraulic_diameter}",
                     f"- Backflow total temperature: {outlet.backflow_temperature} K",
                     "",
                 ]
@@ -178,10 +181,8 @@ class PostProcessor:
                         "get_area_weighted_avg",
                         inlet_name,
                     ),
-                    self._format_surface_metric(
+                    self._format_mass_flow_rate(
                         "Inlet mass flow rate",
-                        "mass-flow-rate",
-                        "get_mass_flow_rate",
                         inlet_name,
                     ),
                 ]
@@ -202,10 +203,8 @@ class PostProcessor:
                         "get_area_weighted_avg",
                         outlet_name,
                     ),
-                    self._format_surface_metric(
+                    self._format_mass_flow_rate(
                         "Outlet mass flow rate",
-                        "mass-flow-rate",
-                        "get_mass_flow_rate",
                         outlet_name,
                     ),
                 ]
@@ -227,10 +226,16 @@ class PostProcessor:
             lambda: method(report_of=report_of, surface_names=[surface_name]),
         )
 
+    def _format_mass_flow_rate(self, label: str, surface_name: str) -> str:
+        surface_integrals = self.solver_session.settings.results.report.surface_integrals
+        return self._format_metric(
+            label,
+            lambda: surface_integrals.get_mass_flow_rate(surface_names=[surface_name]),
+        )
+
     def _format_metric(self, label: str, getter: Callable[[], Any]) -> str:
         try:
             value = getter()
             return f"- {label}: `{value}`"
         except Exception as exc:
             return f"- {label}: unavailable (`{exc}`)"
-

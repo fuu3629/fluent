@@ -37,6 +37,7 @@ class GuiPauseConfig:
     after_update_regions: bool = True
     after_boundary_layers: bool = True
     after_volume_mesh: bool = True
+    before_solver_run: bool = True
 
 
 @dataclass
@@ -44,6 +45,8 @@ class WatertightMeshConfig:
     """Watertight Geometry workflowに投入する設定。"""
 
     geometry_file: str | None = None
+    run_directory: str = "output"
+    cleanup_on_exit: bool = False
     length_unit: str = "mm"
     surface_max_size: float = 0.3
     separation_required: bool = True
@@ -98,6 +101,9 @@ class PressureOutletSetting:
 
     name: str = "pres_outlet_1"
     gauge_pressure: float | None = 0.0
+    turbulence_specification: str | None = "Intensity and Hydraulic Diameter"
+    turbulent_intensity: float | None = None
+    hydraulic_diameter: str | float | None = "100 [mm]"
     backflow_temperature: float | None = 300.0
 
 
@@ -105,6 +111,10 @@ class PressureOutletSetting:
 class SolverConfig:
     """Meshingから切り替えたSolver sessionへ投入する設定。"""
 
+    set_length_unit: bool = True
+    length_unit: str = "mm"
+    length_unit_scale_factor: float = 0.001
+    length_unit_offset: float = 0.0
     perform_mesh_check: bool = True
     energy_enabled: bool = True
     viscous_model: str | None = "k-omega"
@@ -141,7 +151,7 @@ class PostProcessingConfig:
     """解析後のレポート・画像出力設定。"""
 
     enabled: bool = True
-    output_dir: str = "outputs"
+    output_dir: str = "output"
     report_file_name: str = "thermal_report.md"
     save_case_data: bool = True
     case_data_file_name: str = "solution.cas.h5"

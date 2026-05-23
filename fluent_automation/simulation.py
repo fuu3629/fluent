@@ -28,6 +28,10 @@ class FluentSimulationRunner:
         solver_session = meshing_session.switch_to_solver()
         print_color("End Switch To Solver")
 
-        SolverConfigurator(solver_session, self.solver_config).setup()
+        SolverConfigurator(
+            solver_session,
+            self.solver_config,
+            pause_config=self.pause_config,
+        ).setup()
         PostProcessor(solver_session, self.solver_config).generate()
         return solver_session
