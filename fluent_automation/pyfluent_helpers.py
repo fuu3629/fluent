@@ -15,21 +15,31 @@ def set_constant_value(target, value: object, label: str) -> None:
     """
     Fluentの "constant value" 形式の設定へ値を入れる。
 
-    多くの境界条件は `{option, value}` 形式だが、設定状態によっては
-    `value` だけ受け付ける場合があるため、両方を順に試す。
+    PyFluentの設定は、`target.value` を持つgroup、直接set_stateできるReal、
+    `{option, value}` 形式のgroupが混在するため、順に試す。
     """
 
-    try:
-        target.set_state({"option": "constant", "value": value})
-        return
-    except Exception:
-        pass
+    last_error: Exception | None = None
 
     try:
         target.value.set_state(value)
         return
     except Exception as exc:
-        raise RuntimeError(f"Failed to set constant solver setting: {label}") from exc
+        last_error = exc
+
+    try:
+        target.set_state(value)
+        return
+    except Exception as exc:
+        last_error = exc
+
+    try:
+        target.set_state({"option": "constant", "value": value})
+        return
+    except Exception as exc:
+        last_error = exc
+
+    raise RuntimeError(f"Failed to set constant solver setting: {label}") from last_error
 
 
 def workflow_task_summary(watertight) -> list[str]:

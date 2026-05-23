@@ -29,6 +29,17 @@ class BoundaryLayerSetting:
 
 
 @dataclass
+class GuiPauseConfig:
+    """Fluent GUI確認用の一時停止設定。"""
+
+    enabled: bool = False
+    after_surface_mesh: bool = True
+    after_update_regions: bool = True
+    after_boundary_layers: bool = True
+    after_volume_mesh: bool = True
+
+
+@dataclass
 class WatertightMeshConfig:
     """Watertight Geometry workflowに投入する設定。"""
 
@@ -56,7 +67,6 @@ class WatertightMeshConfig:
     ])
     number_of_flow_volumes: int = 1
     retain_dead_region_name: bool = False
-    pause_after_surface_mesh: bool = False
     volume_fill: str = "poly-hexcore"
     processor_count: int = 2
     boundary_layers: list[BoundaryLayerSetting] = field(default_factory=lambda: [
@@ -67,9 +77,6 @@ class WatertightMeshConfig:
             number_of_layers=1,
         ),
     ])
-    pause_after_update_regions: bool = True
-    pause_after_boundary_layers: bool = True
-    pause_after_volume_mesh: bool = True
 
 
 @dataclass

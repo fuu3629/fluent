@@ -7,6 +7,7 @@ from ansys.fluent.core import examples
 from fluent_automation.config import (
     BoundaryLayerSetting,
     CapSetting,
+    GuiPauseConfig,
     WatertightMeshConfig,
 )
 from fluent_automation.console import pause_for_gui, print_color
@@ -17,8 +18,13 @@ from fluent_automation.protocols import MeshingSession
 class WatertightMesher:
     """Watertight Geometry workflowで表面メッシュ・体積メッシュを作成する。"""
 
-    def __init__(self, config: WatertightMeshConfig):
+    def __init__(
+        self,
+        config: WatertightMeshConfig,
+        pause_config: GuiPauseConfig | None = None,
+    ):
         self.config = config
+        self.pause_config = pause_config or GuiPauseConfig()
         self.meshing_session: MeshingSession | None = None
         self.watertight: Any = None
 
@@ -106,7 +112,7 @@ class WatertightMesher:
         create_surface_mesh()
         print_color("End Generate Surface Mesh")
 
-        if self.config.pause_after_surface_mesh:
+        if self.pause_config.enabled and self.pause_config.after_surface_mesh:
             pause_for_gui("表面メッシュ作成が完了しました。必要ならFluent GUIで確認・編集してください。")
 
     def _describe_geometry(self) -> None:
@@ -200,14 +206,14 @@ class WatertightMesher:
         update_regions()
         print_color("End Update Regions")
 
-        if self.config.pause_after_update_regions:
+        if self.pause_config.enabled and self.pause_config.after_update_regions:
             pause_for_gui("Update Regionsが完了しました。必要ならFluent GUIで確認・編集してください。")
 
     def _create_boundary_layers(self) -> None:
         for boundary_layer in self.config.boundary_layers:
             self._create_boundary_layer(boundary_layer)
 
-        if self.config.pause_after_boundary_layers:
+        if self.pause_config.enabled and self.pause_config.after_boundary_layers:
             pause_for_gui("Add Boundary Layersが完了しました。必要ならFluent GUIで確認・編集してください。")
 
     def _create_boundary_layer(self, setting: BoundaryLayerSetting) -> None:
@@ -264,5 +270,5 @@ class WatertightMesher:
         create_volume_mesh()
         print_color("End Generate Volume Mesh")
 
-        if self.config.pause_after_volume_mesh:
+        if self.pause_config.enabled and self.pause_config.after_volume_mesh:
             pause_for_gui("Generate Volume Meshが完了しました。必要ならFluent GUIで確認・編集してください。")

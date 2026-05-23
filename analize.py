@@ -1,5 +1,6 @@
 from fluent_automation.config import (
     GEOMETRY_SETUP_ONLY_SOLID,
+    GuiPauseConfig,
     PostProcessingConfig,
     SolverConfig,
     VelocityInletSetting,
@@ -15,9 +16,16 @@ mesh_config = WatertightMeshConfig(
     separation_required=True,
     separation_angle=40.0,
     geometry_setup_type=GEOMETRY_SETUP_ONLY_SOLID,
-    pause_after_surface_mesh=True,
     volume_fill="poly-hexcore",
     processor_count=2,
+)
+
+gui_pause_config = GuiPauseConfig(
+    enabled=False,
+    after_surface_mesh=True,
+    after_update_regions=True,
+    after_boundary_layers=True,
+    after_volume_mesh=True,
 )
 
 solver_config = SolverConfig(
@@ -49,4 +57,5 @@ if __name__ == "__main__":
     FluentSimulationRunner(
         mesh_config=mesh_config,
         solver_config=solver_config,
+        pause_config=gui_pause_config,
     ).run()

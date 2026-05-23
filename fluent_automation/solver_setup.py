@@ -174,10 +174,15 @@ class SolverConfigurator:
                 f"velocity_inlet[{inlet.name}].hydraulic_diameter",
             )
         if self.config.energy_enabled and inlet.temperature is not None:
+            temperature_setting = self._first_available_setting(
+                thermal,
+                names=("temperature", "total_temperature"),
+                label=f"velocity_inlet[{inlet.name}].thermal temperature",
+            )
             set_constant_value(
-                thermal.total_temperature,
+                temperature_setting,
                 inlet.temperature,
-                f"velocity_inlet[{inlet.name}].total_temperature",
+                f"velocity_inlet[{inlet.name}].temperature",
             )
 
     def _setup_pressure_outlet(self, boundary_conditions) -> None:
@@ -197,11 +202,30 @@ class SolverConfigurator:
                 f"pressure_outlet[{outlet.name}].gauge_pressure",
             )
         if self.config.energy_enabled and outlet.backflow_temperature is not None:
+            backflow_temperature_setting = self._first_available_setting(
+                thermal,
+                names=("backflow_total_temperature", "backflow_temperature"),
+                label=f"pressure_outlet[{outlet.name}].thermal backflow temperature",
+            )
             set_constant_value(
-                thermal.backflow_total_temperature,
+                backflow_temperature_setting,
                 outlet.backflow_temperature,
                 f"pressure_outlet[{outlet.name}].backflow_total_temperature",
             )
+
+    def _first_available_setting(
+        self,
+        parent,
+        names: tuple[str, ...],
+        label: str,
+    ):
+        for name in names:
+            if hasattr(parent, name):
+                return getattr(parent, name)
+
+        raise RuntimeError(
+            f"Failed to find solver setting: {label}. Tried: {', '.join(names)}"
+        )
 
     def _initialize(self) -> None:
         """Hybrid initializationを実行する。"""
