@@ -25,10 +25,11 @@ mesh_config = WatertightMeshConfig(
 
 gui_pause_config = GuiPauseConfig(
     enabled=True,
-    after_surface_mesh=False,
-    after_update_regions=False,
-    after_boundary_layers=False,
-    after_volume_mesh=False,
+    after_surface_mesh=True,
+    after_update_boundaries=True,
+    after_update_regions=True,
+    after_boundary_layers=True,
+    after_volume_mesh=True,
     before_solver_run=True,
 )
 
@@ -49,14 +50,14 @@ solver_config = SolverConfig(
         velocity_specification_method="Magnitude, Normal to Boundary",
         velocity_magnitude=0.4,
         turbulence_specification="Intensity and Hydraulic Diameter",
-        hydraulic_diameter="100 [mm]",
+        hydraulic_diameter=100.0,
         temperature=293.15,
     ),
     pressure_outlet=PressureOutletSetting(
         name="pres_outlet_1",
         gauge_pressure=0.0,
         turbulence_specification="Intensity and Hydraulic Diameter",
-        hydraulic_diameter="100 [mm]",
+        hydraulic_diameter=100.0,
         backflow_temperature=None,
     ),
     initialize=True,
@@ -69,13 +70,15 @@ solver_config = SolverConfig(
 
 
 if __name__ == "__main__":
+    runner = FluentSimulationRunner(
+        mesh_config=mesh_config,
+        solver_config=solver_config,
+        pause_config=gui_pause_config,
+    )
     try:
-        FluentSimulationRunner(
-            mesh_config=mesh_config,
-            solver_config=solver_config,
-            pause_config=gui_pause_config,
-        ).run()
+        runner.run()
     except Exception as exc:
         print(f"\nError: {exc}")
         input("Fluent GUIを確認してください。終了するにはEnterを押してください: ")
+        runner.close()
         raise

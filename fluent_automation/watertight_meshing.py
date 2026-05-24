@@ -6,6 +6,7 @@ from ansys.fluent.core import examples
 
 from fluent_automation.config import (
     BoundaryLayerSetting,
+    BoundaryTypeSetting,
     CapSetting,
     GuiPauseConfig,
     WatertightMeshConfig,
@@ -41,6 +42,7 @@ class WatertightMesher:
             self._create_caps()
             self._create_regions()
 
+        self._update_boundaries()
         self._update_regions()
         self._create_boundary_layers()
         self._generate_volume_mesh()
@@ -115,6 +117,7 @@ class WatertightMesher:
         create_surface_mesh.arguments.update_dict(surface_mesh_args)
         create_surface_mesh()
         print_color("End Generate Surface Mesh")
+        self._print_boundary_zone_debug("after_surface_mesh")
 
         if self.pause_config.enabled and self.pause_config.after_surface_mesh:
             pause_for_gui("表面メッシュ作成が完了しました。必要ならFluent GUIで確認・編集してください。")
@@ -213,6 +216,67 @@ class WatertightMesher:
         if self.pause_config.enabled and self.pause_config.after_update_regions:
             pause_for_gui("Update Regionsが完了しました。必要ならFluent GUIで確認・編集してください。")
 
+    def _update_boundaries(self) -> None:
+        """Solverへ渡す境界名と境界タイプを明示する。"""
+
+        for boundary_type in self.config.boundary_type_settings:
+            self._update_boundary(boundary_type)
+
+        self._print_boundary_zone_debug("after_update_boundaries")
+
+        if self.pause_config.enabled and self.pause_config.after_update_boundaries:
+            pause_for_gui("Update Boundariesが完了しました。境界一覧をFluent GUIで確認してください。")
+
+    def _update_boundary(self, setting: BoundaryTypeSetting) -> None:
+        """Meshing側のface zoneをSolver側の独立した境界として登録する。"""
+
+        print_color(f"Start Update Boundary: {setting.name} -> {setting.zone_type}")
+        update_boundaries = get_workflow_task(
+            self.watertight,
+            display_name="Update Boundaries",
+            python_name="update_boundaries",
+        )
+        update_args: dict[str, object] = {
+            "selection_type": setting.selection_type,
+            "boundary_zone_list": setting.zones,
+            "boundary_label_list": [setting.name],
+            "boundary_label_type_list": [setting.zone_type],
+        }
+        if setting.old_name is not None:
+            update_args["old_boundary_label_list"] = [setting.old_name]
+        if setting.old_zone_type is not None:
+            update_args["old_boundary_label_type_list"] = [setting.old_zone_type]
+
+        self._execute_update_boundaries(update_boundaries, update_args, setting)
+        print_color(f"End Update Boundary: {setting.name} -> {setting.zone_type}")
+
+    def _execute_update_boundaries(
+        self,
+        update_boundaries,
+        update_args: dict[str, object],
+        setting: BoundaryTypeSetting,
+    ) -> None:
+        """2025R2のlegacy workflowと新しめのtyped workflowの両方を扱う。"""
+
+        legacy_error: Exception | None = None
+        try:
+            update_boundaries.arguments.update_dict(update_args)
+            update_boundaries()
+            return
+        except Exception as exc:
+            legacy_error = exc
+
+        try:
+            for name, value in update_args.items():
+                getattr(update_boundaries, name).set_state(value)
+            update_boundaries()
+            return
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to update boundary '{setting.name}' from zones "
+                f"{setting.zones} to type '{setting.zone_type}'."
+            ) from legacy_error or exc
+
     def _create_boundary_layers(self) -> None:
         for boundary_layer in self.config.boundary_layers:
             self._create_boundary_layer(boundary_layer)
@@ -273,6 +337,76 @@ class WatertightMesher:
         create_volume_mesh.arguments.update_dict({"volume_fill": self.config.volume_fill})
         create_volume_mesh()
         print_color("End Generate Volume Mesh")
+        self._print_boundary_zone_debug("after_volume_mesh")
 
         if self.pause_config.enabled and self.pause_config.after_volume_mesh:
             pause_for_gui("Generate Volume Meshが完了しました。必要ならFluent GUIで確認・編集してください。")
+
+    def _print_boundary_zone_debug(self, stage: str) -> None:
+        """対象face zoneがMeshing側に残っているかを確認する。"""
+
+        if not self.config.boundary_type_settings:
+            return
+
+        session = self._require_meshing_session()
+        meshing_utilities = getattr(session, "meshing_utilities", None)
+        if meshing_utilities is None:
+            print_color(
+                f"[{stage}] meshing_utilities is not available.",
+                color="yellow",
+            )
+            return
+
+        targets = self._boundary_debug_targets()
+        print_color(f"[{stage}] Boundary zone debug", color="blue")
+        for target in targets:
+            exists = self._safe_meshing_query(
+                lambda: meshing_utilities.boundary_zone_exists(zone_name=target)
+            )
+            zone_type = self._safe_meshing_query(
+                lambda: meshing_utilities.get_zone_type(zone_name=target)
+            )
+            labels = self._safe_meshing_query(
+                lambda: meshing_utilities.get_labels_on_face_zones(
+                    face_zone_name_list=[target]
+                )
+            )
+            print_color(
+                f"[{stage}] {target}: exists={exists}, type={zone_type}, "
+                f"labels={labels}",
+                color="blue",
+            )
+
+        for pattern in self._boundary_debug_patterns(targets):
+            matches = self._safe_meshing_query(
+                lambda pattern=pattern: meshing_utilities.get_face_zones(
+                    filter=pattern
+                )
+            )
+            print_color(
+                f"[{stage}] get_face_zones(filter={pattern!r}) -> {matches}",
+                color="blue",
+            )
+
+    def _boundary_debug_targets(self) -> list[str]:
+        targets: list[str] = []
+        for setting in self.config.boundary_type_settings:
+            for name in [setting.name, *setting.zones]:
+                if name not in targets:
+                    targets.append(name)
+        return targets
+
+    def _boundary_debug_patterns(self, targets: list[str]) -> list[str]:
+        patterns: list[str] = []
+        for target in targets:
+            suffix = target.rsplit(":", maxsplit=1)[-1]
+            pattern = f"*{suffix}*"
+            if pattern not in patterns:
+                patterns.append(pattern)
+        return patterns
+
+    def _safe_meshing_query(self, query):
+        try:
+            return query()
+        except Exception as exc:
+            return f"ERROR: {exc}"

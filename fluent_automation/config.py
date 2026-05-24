@@ -29,11 +29,24 @@ class BoundaryLayerSetting:
 
 
 @dataclass
+class BoundaryTypeSetting:
+    """Update BoundariesでSolverへ渡す境界名・境界タイプの設定。"""
+
+    name: str
+    zone_type: str
+    zones: list[str]
+    selection_type: str = "zone"
+    old_name: str | None = None
+    old_zone_type: str | None = None
+
+
+@dataclass
 class GuiPauseConfig:
     """Fluent GUI確認用の一時停止設定。"""
 
     enabled: bool = False
     after_surface_mesh: bool = True
+    after_update_boundaries: bool = True
     after_update_regions: bool = True
     after_boundary_layers: bool = True
     after_volume_mesh: bool = True
@@ -68,6 +81,15 @@ class WatertightMeshConfig:
             zones=["document-brep_1:1:14"],
         ),
     ])
+    boundary_type_settings: list[BoundaryTypeSetting] = field(default_factory=lambda: [
+        BoundaryTypeSetting(
+            name="document-brep_1:1:15",
+            zone_type="wall",
+            zones=["document-brep_1:1:15"],
+            old_name="document-brep_1",
+            old_zone_type="wall",
+        ),
+    ])
     number_of_flow_volumes: int = 1
     retain_dead_region_name: bool = False
     volume_fill: str = "poly-hexcore"
@@ -91,7 +113,7 @@ class VelocityInletSetting:
     velocity_magnitude: float | None = 0.4
     turbulence_specification: str | None = "Intensity and Hydraulic Diameter"
     turbulent_intensity: float | None = None
-    hydraulic_diameter: str | float | None = "100 [mm]"
+    hydraulic_diameter: float | None = 100.0
     temperature: float | None = 293.15
 
 
@@ -103,7 +125,7 @@ class PressureOutletSetting:
     gauge_pressure: float | None = 0.0
     turbulence_specification: str | None = "Intensity and Hydraulic Diameter"
     turbulent_intensity: float | None = None
-    hydraulic_diameter: str | float | None = "100 [mm]"
+    hydraulic_diameter: float | None = 100.0
     backflow_temperature: float | None = 300.0
 
 

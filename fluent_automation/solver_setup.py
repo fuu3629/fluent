@@ -43,18 +43,50 @@ class SolverConfigurator:
             return
 
         print_color(f"Start Set Units: length -> {self.config.length_unit}")
+        self._set_length_unit()
+        print_color(f"End Set Units: length -> {self.config.length_unit}")
+
+    def _set_length_unit(self) -> None:
+        errors: list[Exception] = []
+
+        settings_api_candidates = (
+            "setup.general.units_settings",
+            "setup.units_settings",
+        )
+        for candidate in settings_api_candidates:
+            try:
+                units_settings = self._resolve_settings_path(
+                    self.solver_session.settings,
+                    candidate,
+                )
+                units_settings.new_unit(
+                    quantity="length",
+                    units_name=self.config.length_unit,
+                    scale_factor=self.config.length_unit_scale_factor,
+                    offset=self.config.length_unit_offset,
+                )
+                return
+            except Exception as exc:
+                errors.append(exc)
+
         try:
-            self.solver_session.settings.setup.units_settings.new_unit(
-                quantity="length",
-                units_name=self.config.length_unit,
-                scale_factor=self.config.length_unit_scale_factor,
-                offset=self.config.length_unit_offset,
+            self.solver_session.tui.define.units(
+                "length",
+                self.config.length_unit,
             )
+            return
         except Exception as exc:
+            errors.append(exc)
             raise RuntimeError(
                 f"Failed to set length unit: {self.config.length_unit}"
-            ) from exc
-        print_color(f"End Set Units: length -> {self.config.length_unit}")
+            ) from errors[0]
+
+    def _resolve_settings_path(self, root, path: str):
+        target = root
+        for name in path.split("."):
+            target = getattr(target, name)
+
+        return target
 
     def _perform_mesh_check(self) -> None:
         """Solver modeでmesh checkを実行する。"""
