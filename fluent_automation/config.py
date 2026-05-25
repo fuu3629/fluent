@@ -46,7 +46,6 @@ class GuiPauseConfig:
 
     enabled: bool = False
     after_surface_mesh: bool = True
-    after_update_boundaries: bool = True
     after_update_regions: bool = True
     after_boundary_layers: bool = True
     after_volume_mesh: bool = True
@@ -83,7 +82,7 @@ class WatertightMeshConfig:
     ])
     boundary_type_settings: list[BoundaryTypeSetting] = field(default_factory=lambda: [
         BoundaryTypeSetting(
-            name="document-brep_1:1:15",
+            name="wall_15",
             zone_type="wall",
             zones=["document-brep_1:1:15"],
             old_name="document-brep_1",
@@ -93,6 +92,7 @@ class WatertightMeshConfig:
     number_of_flow_volumes: int = 1
     retain_dead_region_name: bool = False
     volume_fill: str = "poly-hexcore"
+    re_merge_zones: bool = False
     processor_count: int = 2
     boundary_layers: list[BoundaryLayerSetting] = field(default_factory=lambda: [
         BoundaryLayerSetting(control_name="smooth-transition_1"),
@@ -130,6 +130,15 @@ class PressureOutletSetting:
 
 
 @dataclass
+class WallHeatFluxSetting:
+    """Solverでwallへ入れる熱流束境界条件。"""
+
+    name: str = "wall_15"
+    thermal_condition: str = "Heat Flux"
+    heat_flux: float = 60000.0
+
+
+@dataclass
 class SolverConfig:
     """Meshingから切り替えたSolver sessionへ投入する設定。"""
 
@@ -150,6 +159,9 @@ class SolverConfig:
     )
     pressure_outlet: PressureOutletSetting | None = field(
         default_factory=PressureOutletSetting
+    )
+    wall_heat_fluxes: list[WallHeatFluxSetting] = field(
+        default_factory=lambda: [WallHeatFluxSetting()]
     )
     initialize: bool = True
     iterations: int = 200
@@ -175,6 +187,7 @@ class PostProcessingConfig:
     enabled: bool = True
     output_dir: str = "output"
     report_file_name: str = "thermal_report.md"
+    metrics_file_name: str = "metrics.csv"
     save_case_data: bool = True
     case_data_file_name: str = "solution.cas.h5"
     contour_images: list[ContourImageSetting] = field(default_factory=lambda: [

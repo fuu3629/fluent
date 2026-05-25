@@ -25,11 +25,10 @@ mesh_config = WatertightMeshConfig(
 
 gui_pause_config = GuiPauseConfig(
     enabled=True,
-    after_surface_mesh=True,
-    after_update_boundaries=True,
-    after_update_regions=True,
-    after_boundary_layers=True,
-    after_volume_mesh=True,
+    after_surface_mesh=False,
+    after_update_regions=False,
+    after_boundary_layers=False,
+    after_volume_mesh=False,
     before_solver_run=True,
 )
 

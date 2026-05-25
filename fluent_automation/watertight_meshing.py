@@ -117,7 +117,6 @@ class WatertightMesher:
         create_surface_mesh.arguments.update_dict(surface_mesh_args)
         create_surface_mesh()
         print_color("End Generate Surface Mesh")
-        self._print_boundary_zone_debug("after_surface_mesh")
 
         if self.pause_config.enabled and self.pause_config.after_surface_mesh:
             pause_for_gui("表面メッシュ作成が完了しました。必要ならFluent GUIで確認・編集してください。")
@@ -212,6 +211,7 @@ class WatertightMesher:
         )
         update_regions()
         print_color("End Update Regions")
+        self._reapply_boundary_type_settings()
 
         if self.pause_config.enabled and self.pause_config.after_update_regions:
             pause_for_gui("Update Regionsが完了しました。必要ならFluent GUIで確認・編集してください。")
@@ -219,13 +219,18 @@ class WatertightMesher:
     def _update_boundaries(self) -> None:
         """Solverへ渡す境界名と境界タイプを明示する。"""
 
+        self._apply_boundary_type_settings()
+
+    def _apply_boundary_type_settings(self) -> None:
         for boundary_type in self.config.boundary_type_settings:
             self._update_boundary(boundary_type)
+            self._relabel_boundary_face_zone(boundary_type)
 
-        self._print_boundary_zone_debug("after_update_boundaries")
+    def _reapply_boundary_type_settings(self) -> None:
+        if not self.config.boundary_type_settings:
+            return
 
-        if self.pause_config.enabled and self.pause_config.after_update_boundaries:
-            pause_for_gui("Update Boundariesが完了しました。境界一覧をFluent GUIで確認してください。")
+        self._apply_boundary_type_settings()
 
     def _update_boundary(self, setting: BoundaryTypeSetting) -> None:
         """Meshing側のface zoneをSolver側の独立した境界として登録する。"""
@@ -277,9 +282,44 @@ class WatertightMesher:
                 f"{setting.zones} to type '{setting.zone_type}'."
             ) from legacy_error or exc
 
+    def _relabel_boundary_face_zone(self, setting: BoundaryTypeSetting) -> None:
+        """Volume mesh生成時に既存wallへ統合されないようface zone labelを分ける。"""
+
+        session = self._require_meshing_session()
+        meshing_utilities = getattr(session, "meshing_utilities", None)
+        if meshing_utilities is None:
+            raise RuntimeError("meshing_utilities is not available.")
+
+        labels_to_remove: list[str] = []
+        if setting.old_name is not None and setting.old_name != setting.name:
+            labels_to_remove.append(setting.old_name)
+
+        for zone_name in setting.zones:
+            try:
+                current_labels = meshing_utilities.get_labels_on_face_zones(
+                    face_zone_name_list=[zone_name]
+                ) or []
+                if setting.name not in current_labels:
+                    meshing_utilities.add_labels_on_face_zones(
+                        face_zone_name_list=[zone_name],
+                        label_name_list=[setting.name],
+                    )
+                if labels_to_remove:
+                    meshing_utilities.remove_labels_on_face_zones(
+                        face_zone_name_list=[zone_name],
+                        label_name_list=labels_to_remove,
+                    )
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Failed to relabel face zone '{zone_name}' as "
+                    f"'{setting.name}'."
+                ) from exc
+
     def _create_boundary_layers(self) -> None:
         for boundary_layer in self.config.boundary_layers:
             self._create_boundary_layer(boundary_layer)
+
+        self._reapply_boundary_type_settings()
 
         if self.pause_config.enabled and self.pause_config.after_boundary_layers:
             pause_for_gui("Add Boundary Layersが完了しました。必要ならFluent GUIで確認・編集してください。")
@@ -334,16 +374,46 @@ class WatertightMesher:
                 "generate_the_volume_mesh",
             ),
         )
-        create_volume_mesh.arguments.update_dict({"volume_fill": self.config.volume_fill})
+        self._set_volume_mesh_arguments(create_volume_mesh)
         create_volume_mesh()
         print_color("End Generate Volume Mesh")
-        self._print_boundary_zone_debug("after_volume_mesh")
+        self._rename_labeled_boundary_zones_after_volume_mesh()
 
         if self.pause_config.enabled and self.pause_config.after_volume_mesh:
             pause_for_gui("Generate Volume Meshが完了しました。必要ならFluent GUIで確認・編集してください。")
 
-    def _print_boundary_zone_debug(self, stage: str) -> None:
-        """対象face zoneがMeshing側に残っているかを確認する。"""
+    def _set_volume_mesh_arguments(self, create_volume_mesh) -> None:
+        """Volume mesh taskの新旧API名に対応して引数を設定する。"""
+
+        create_volume_mesh.arguments.update_dict({"volume_fill": self.config.volume_fill})
+        self._set_re_merge_zones_argument(create_volume_mesh)
+
+    def _set_re_merge_zones_argument(self, create_volume_mesh) -> None:
+        """Merge back separated boundary zonesを明示的に設定する。"""
+
+        desired_bool = self.config.re_merge_zones
+        desired_yes_no = fluent_yes_no(desired_bool)
+        attempts = (
+            {"re_merge_zones": desired_bool},
+            {"ReMergeZones": desired_yes_no},
+        )
+        errors: list[Exception] = []
+        applied = False
+
+        for args in attempts:
+            try:
+                create_volume_mesh.arguments.update_dict(args)
+                applied = True
+            except Exception as exc:
+                errors.append(exc)
+
+        if not applied:
+            raise RuntimeError(
+                "Failed to set Generate Volume Mesh re-merge zones option."
+            ) from errors[0]
+
+    def _rename_labeled_boundary_zones_after_volume_mesh(self) -> None:
+        """Volume mesh後にlabelから再生成されたface zoneをSolver用の名前へ変える。"""
 
         if not self.config.boundary_type_settings:
             return
@@ -351,62 +421,53 @@ class WatertightMesher:
         session = self._require_meshing_session()
         meshing_utilities = getattr(session, "meshing_utilities", None)
         if meshing_utilities is None:
+            raise RuntimeError("meshing_utilities is not available.")
+
+        for setting in self.config.boundary_type_settings:
+            try:
+                zone_ids = meshing_utilities.get_face_zone_id_list_with_labels(
+                    face_zone_name_pattern="*",
+                    label_name_list=[setting.name],
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Failed to find face zones with label '{setting.name}'."
+                ) from exc
+
+            if not zone_ids:
+                continue
+
+            for index, zone_id in enumerate(zone_ids):
+                new_name = (
+                    setting.name
+                    if len(zone_ids) == 1
+                    else f"{setting.name}_{index + 1}"
+                )
+                self._rename_face_zone_by_id(meshing_utilities, zone_id, new_name)
+
+    def _rename_face_zone_by_id(
+        self,
+        meshing_utilities,
+        zone_id: int,
+        new_name: str,
+    ) -> None:
+        try:
+            existing_ids = meshing_utilities.get_face_zones(filter=new_name)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to check existing face zone name '{new_name}'."
+            ) from exc
+
+        if existing_ids:
             print_color(
-                f"[{stage}] meshing_utilities is not available.",
+                f"Face zone name already exists: {new_name}. Skip rename for zone ID {zone_id}.",
                 color="yellow",
             )
             return
 
-        targets = self._boundary_debug_targets()
-        print_color(f"[{stage}] Boundary zone debug", color="blue")
-        for target in targets:
-            exists = self._safe_meshing_query(
-                lambda: meshing_utilities.boundary_zone_exists(zone_name=target)
-            )
-            zone_type = self._safe_meshing_query(
-                lambda: meshing_utilities.get_zone_type(zone_name=target)
-            )
-            labels = self._safe_meshing_query(
-                lambda: meshing_utilities.get_labels_on_face_zones(
-                    face_zone_name_list=[target]
-                )
-            )
-            print_color(
-                f"[{stage}] {target}: exists={exists}, type={zone_type}, "
-                f"labels={labels}",
-                color="blue",
-            )
-
-        for pattern in self._boundary_debug_patterns(targets):
-            matches = self._safe_meshing_query(
-                lambda pattern=pattern: meshing_utilities.get_face_zones(
-                    filter=pattern
-                )
-            )
-            print_color(
-                f"[{stage}] get_face_zones(filter={pattern!r}) -> {matches}",
-                color="blue",
-            )
-
-    def _boundary_debug_targets(self) -> list[str]:
-        targets: list[str] = []
-        for setting in self.config.boundary_type_settings:
-            for name in [setting.name, *setting.zones]:
-                if name not in targets:
-                    targets.append(name)
-        return targets
-
-    def _boundary_debug_patterns(self, targets: list[str]) -> list[str]:
-        patterns: list[str] = []
-        for target in targets:
-            suffix = target.rsplit(":", maxsplit=1)[-1]
-            pattern = f"*{suffix}*"
-            if pattern not in patterns:
-                patterns.append(pattern)
-        return patterns
-
-    def _safe_meshing_query(self, query):
         try:
-            return query()
+            meshing_utilities.rename_face_zone(zone_id=zone_id, new_name=new_name)
         except Exception as exc:
-            return f"ERROR: {exc}"
+            raise RuntimeError(
+                f"Failed to rename face zone ID {zone_id} to '{new_name}'."
+            ) from exc

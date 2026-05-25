@@ -1,5 +1,8 @@
+import csv
+import math
+import re
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 from ansys.fluent.core.solver import Contour
 
@@ -25,7 +28,14 @@ class PostProcessor:
 
         case_data_path = self._save_case_data()
         image_paths = self._save_contour_images()
-        self._write_report(case_data_path=case_data_path, image_paths=image_paths)
+        metrics = self._compute_metrics()
+        metrics_path = self._write_metrics_csv(metrics)
+        self._write_report(
+            case_data_path=case_data_path,
+            image_paths=image_paths,
+            metrics=metrics,
+            metrics_path=metrics_path,
+        )
         print_color("End Post Processing")
 
     def _save_case_data(self) -> Path | None:
@@ -54,16 +64,19 @@ class PostProcessor:
     def _save_contour_image(self, image_setting: ContourImageSetting) -> Path | None:
         image_path = self.output_dir / image_setting.file_name
         try:
-            contour = Contour(
+            contour_factory = cast(Any, Contour)
+            contour = contour_factory(
                 self.solver_session,
                 new_instance_name=image_setting.name,
             )
-            contour.field = image_setting.field
-            contour.surfaces_list = self._resolve_contour_surfaces(
-                contour=contour,
-                configured_surfaces=image_setting.surfaces,
+            self._configure_contour(
+                contour,
+                field=image_setting.field,
+                surfaces=self._resolve_contour_surfaces(
+                    contour=contour,
+                    configured_surfaces=image_setting.surfaces,
+                ),
             )
-            contour.colorings.banded = True
             contour.display()
 
             graphics = self.solver_session.settings.results.graphics
@@ -76,6 +89,12 @@ class PostProcessor:
                 color="yellow",
             )
             return None
+
+    def _configure_contour(self, contour, field: str, surfaces: list[str]) -> None:
+        contour_api = cast(Any, contour)
+        contour_api.field = field
+        contour_api.surfaces_list = surfaces
+        contour_api.colorings.banded = True
 
     def _resolve_contour_surfaces(
         self,
@@ -95,6 +114,8 @@ class PostProcessor:
         self,
         case_data_path: Path | None,
         image_paths: list[Path],
+        metrics: dict[str, float],
+        metrics_path: Path,
     ) -> None:
         report_path = self.output_dir / self.config.report_file_name
         lines = [
@@ -140,16 +161,167 @@ class PostProcessor:
                 ]
             )
 
+        for wall_heat_flux in self.solver_config.wall_heat_fluxes:
+            lines.extend(
+                [
+                    f"- Wall heat flux: {wall_heat_flux.name}",
+                    f"- Thermal condition: {wall_heat_flux.thermal_condition}",
+                    f"- Heat flux: {wall_heat_flux.heat_flux} W/m^2",
+                    "",
+                ]
+            )
+
         lines.extend(["## Result Summary", ""])
         lines.extend(self._report_metrics())
+        lines.extend(["", "## Optimization Metrics", ""])
+        lines.extend(self._format_metrics_for_report(metrics))
 
         lines.extend(["", "## Output Files", ""])
         if case_data_path is not None:
             lines.append(f"- Case/data: `{case_data_path}`")
+        lines.append(f"- Metrics CSV: `{metrics_path}`")
         for image_path in image_paths:
             lines.append(f"- Image: `{image_path}`")
 
         report_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def _write_metrics_csv(self, metrics: dict[str, float]) -> Path:
+        metrics_path = self.output_dir / self.config.metrics_file_name
+        with metrics_path.open("w", newline="", encoding="utf-8") as csv_file:
+            writer = csv.writer(csv_file)
+            writer.writerow(metrics.keys())
+            writer.writerow(metrics.values())
+
+        return metrics_path
+
+    def _compute_metrics(self) -> dict[str, float]:
+        metrics: dict[str, float] = {}
+        surface_integrals = self.solver_session.settings.results.report.surface_integrals
+
+        inlet = self.solver_config.velocity_inlet
+        outlet = self.solver_config.pressure_outlet
+        if inlet is None or outlet is None:
+            return metrics
+
+        tin = self._resolve_inlet_temperature(surface_integrals, inlet.name)
+        pin = self._surface_area_weighted_value(surface_integrals, "pressure", inlet.name)
+        pout = self._surface_area_weighted_value(surface_integrals, "pressure", outlet.name)
+        delta_p = pin - pout
+
+        metrics["Tin"] = tin
+        metrics["Pin"] = pin
+        metrics["Pout"] = pout
+        metrics["deltaP"] = delta_p
+
+        for index, wall_heat_flux in enumerate(self.solver_config.wall_heat_fluxes):
+            wall_name = wall_heat_flux.name
+            wall_area = self._surface_area(surface_integrals, wall_name)
+            tavg = self._surface_area_weighted_value(
+                surface_integrals,
+                "temperature",
+                wall_name,
+            )
+            q_total = wall_heat_flux.heat_flux * wall_area
+            rth = (tavg - tin) / q_total
+
+            metrics[f"Tavg_{wall_name}"] = tavg
+            metrics[f"Area_{wall_name}"] = wall_area
+            metrics[f"Q_{wall_name}"] = q_total
+            metrics[f"Rth_{wall_name}"] = rth
+
+            if index == 0:
+                metrics["Tavg"] = tavg
+                metrics["Q"] = q_total
+                metrics["Rth"] = rth
+
+        return metrics
+
+    def _resolve_inlet_temperature(self, surface_integrals, inlet_name: str) -> float:
+        inlet = self.solver_config.velocity_inlet
+        if inlet is not None and inlet.temperature is not None:
+            return inlet.temperature
+
+        return self._surface_area_weighted_value(
+            surface_integrals,
+            "temperature",
+            inlet_name,
+        )
+
+    def _surface_area(self, surface_integrals, surface_name: str) -> float:
+        value = self._call_surface_integral(
+            surface_integrals,
+            "area",
+            surface_names=[surface_name],
+        )
+        return self._extract_float(value)
+
+    def _surface_area_weighted_value(
+        self,
+        surface_integrals,
+        report_of: str,
+        surface_name: str,
+    ) -> float:
+        value = self._call_surface_integral(
+            surface_integrals,
+            "area_weighted_avg",
+            report_of=report_of,
+            surface_names=[surface_name],
+        )
+        return self._extract_float(value)
+
+    def _call_surface_integral(self, surface_integrals, method_name: str, **kwargs):
+        """Call a surface-integral command across PyFluent naming variants."""
+        method_names = [method_name]
+        if method_name.startswith("get_"):
+            method_names.append(method_name.removeprefix("get_"))
+        else:
+            method_names.append(f"get_{method_name}")
+
+        for candidate_name in method_names:
+            method = getattr(surface_integrals, candidate_name, None)
+            if method is not None:
+                return method(**kwargs)
+
+        raise AttributeError(f"surface_integrals has no method for {method_name!r}")
+
+    def _extract_float(self, value: Any) -> float:
+        if isinstance(value, bool):
+            raise ValueError(f"Boolean value is not numeric: {value}")
+        if isinstance(value, int | float):
+            number = float(value)
+            if math.isfinite(number):
+                return number
+
+        if isinstance(value, dict):
+            preferred_keys = ("value", "result", "total", "net", "sum")
+            for key in preferred_keys:
+                if key in value:
+                    return self._extract_float(value[key])
+            for item in value.values():
+                try:
+                    return self._extract_float(item)
+                except ValueError:
+                    continue
+
+        if isinstance(value, list | tuple):
+            for item in reversed(value):
+                try:
+                    return self._extract_float(item)
+                except ValueError:
+                    continue
+
+        if isinstance(value, str):
+            match = re.search(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?", value)
+            if match is not None:
+                return float(match.group(0))
+
+        raise ValueError(f"Could not extract a numeric value from {value!r}")
+
+    def _format_metrics_for_report(self, metrics: dict[str, float]) -> list[str]:
+        if not metrics:
+            return ["- Optimization metrics: unavailable"]
+
+        return [f"- {name}: `{value}`" for name, value in metrics.items()]
 
     def _report_metrics(self) -> list[str]:
         outlet_name = (
@@ -220,17 +392,25 @@ class PostProcessor:
         surface_name: str,
     ) -> str:
         surface_integrals = self.solver_session.settings.results.report.surface_integrals
-        method = getattr(surface_integrals, method_name)
         return self._format_metric(
             label,
-            lambda: method(report_of=report_of, surface_names=[surface_name]),
+            lambda: self._call_surface_integral(
+                surface_integrals,
+                method_name,
+                report_of=report_of,
+                surface_names=[surface_name],
+            ),
         )
 
     def _format_mass_flow_rate(self, label: str, surface_name: str) -> str:
         surface_integrals = self.solver_session.settings.results.report.surface_integrals
         return self._format_metric(
             label,
-            lambda: surface_integrals.get_mass_flow_rate(surface_names=[surface_name]),
+            lambda: self._call_surface_integral(
+                surface_integrals,
+                "mass_flow_rate",
+                surface_names=[surface_name],
+            ),
         )
 
     def _format_metric(self, label: str, getter: Callable[[], Any]) -> str:

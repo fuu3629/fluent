@@ -1,4 +1,4 @@
-from fluent_automation.config import GuiPauseConfig, SolverConfig
+from fluent_automation.config import GuiPauseConfig, SolverConfig, WallHeatFluxSetting
 from fluent_automation.console import pause_for_gui, print_color
 from fluent_automation.pyfluent_helpers import set_constant_value, set_state
 
@@ -193,6 +193,7 @@ class SolverConfigurator:
         boundary_conditions = self.solver_session.settings.setup.boundary_conditions
         self._setup_velocity_inlet(boundary_conditions)
         self._setup_pressure_outlet(boundary_conditions)
+        self._setup_wall_heat_fluxes(boundary_conditions)
 
     def _setup_velocity_inlet(self, boundary_conditions) -> None:
         inlet = self.config.velocity_inlet
@@ -303,6 +304,43 @@ class SolverConfigurator:
                 outlet.backflow_temperature,
                 f"pressure_outlet[{outlet.name}].backflow_total_temperature",
             )
+
+    def _setup_wall_heat_fluxes(self, boundary_conditions) -> None:
+        for wall_heat_flux in self.config.wall_heat_fluxes:
+            self._setup_wall_heat_flux(boundary_conditions, wall_heat_flux)
+
+    def _setup_wall_heat_flux(
+        self,
+        boundary_conditions,
+        setting: WallHeatFluxSetting,
+    ) -> None:
+        if not self.config.energy_enabled:
+            print_color(
+                f"Skip wall heat flux for {setting.name}: energy model is disabled.",
+                color="yellow",
+            )
+            return
+
+        print_color(
+            f"Start Set Wall Heat Flux: {setting.name} -> {setting.heat_flux}"
+        )
+        wall = boundary_conditions.wall[setting.name]
+        wall_settings = getattr(wall, "settings", wall)
+        thermal = wall_settings.thermal
+
+        set_state(
+            thermal.thermal_condition,
+            setting.thermal_condition,
+            f"wall[{setting.name}].thermal.thermal_condition",
+        )
+        set_constant_value(
+            thermal.heat_flux,
+            setting.heat_flux,
+            f"wall[{setting.name}].thermal.heat_flux",
+        )
+        print_color(
+            f"End Set Wall Heat Flux: {setting.name} -> {setting.heat_flux}"
+        )
 
     def _first_available_setting(
         self,
