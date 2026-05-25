@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Callable, cast
 
 from ansys.fluent.core.solver import Contour
+from ansys.units.variable_descriptor import VariableCatalog
 
 from fluent_automation.config import ContourImageSetting, PostProcessingConfig, SolverConfig
 from fluent_automation.console import print_color
@@ -196,16 +197,15 @@ class PostProcessor:
 
     def _compute_metrics(self) -> dict[str, float]:
         metrics: dict[str, float] = {}
-        surface_integrals = self.solver_session.settings.results.report.surface_integrals
 
         inlet = self.solver_config.velocity_inlet
         outlet = self.solver_config.pressure_outlet
         if inlet is None or outlet is None:
             return metrics
 
-        tin = self._resolve_inlet_temperature(surface_integrals, inlet.name)
-        pin = self._surface_area_weighted_value(surface_integrals, "pressure", inlet.name)
-        pout = self._surface_area_weighted_value(surface_integrals, "pressure", outlet.name)
+        tin = self._resolve_inlet_temperature(inlet.name)
+        pin = self._surface_area_weighted_value("pressure", inlet.name)
+        pout = self._surface_area_weighted_value("pressure", outlet.name)
         delta_p = pin - pout
 
         metrics["Tin"] = tin
@@ -215,9 +215,8 @@ class PostProcessor:
 
         for index, wall_heat_flux in enumerate(self.solver_config.wall_heat_fluxes):
             wall_name = wall_heat_flux.name
-            wall_area = self._surface_area(surface_integrals, wall_name)
+            wall_area = self._surface_area(wall_name)
             tavg = self._surface_area_weighted_value(
-                surface_integrals,
                 "temperature",
                 wall_name,
             )
@@ -236,38 +235,86 @@ class PostProcessor:
 
         return metrics
 
-    def _resolve_inlet_temperature(self, surface_integrals, inlet_name: str) -> float:
+    def _resolve_inlet_temperature(self, inlet_name: str) -> float:
         inlet = self.solver_config.velocity_inlet
         if inlet is not None and inlet.temperature is not None:
             return inlet.temperature
 
         return self._surface_area_weighted_value(
-            surface_integrals,
             "temperature",
             inlet_name,
         )
 
-    def _surface_area(self, surface_integrals, surface_name: str) -> float:
-        value = self._call_surface_integral(
-            surface_integrals,
-            "area",
-            surface_names=[surface_name],
+    def _surface_area(self, surface_name: str) -> float:
+        return self._first_numeric_result(
+            (
+                lambda: self.solver_session.fields.reduction.area([surface_name]),
+                lambda: self._surface_integral_value(
+                    "area",
+                    surface_names=[surface_name],
+                ),
+            ),
+            f"area of {surface_name}",
         )
-        return self._extract_float(value)
 
     def _surface_area_weighted_value(
         self,
-        surface_integrals,
         report_of: str,
         surface_name: str,
     ) -> float:
-        value = self._call_surface_integral(
-            surface_integrals,
-            "area_weighted_avg",
-            report_of=report_of,
-            surface_names=[surface_name],
+        expression_candidates = self._reduction_expression_candidates(report_of)
+        report_of_candidates = self._surface_integral_field_candidates(report_of)
+
+        getters: list[Callable[[], Any]] = []
+        for expression in expression_candidates:
+            getters.append(
+                lambda expression=expression: self.solver_session.fields.reduction.area_average(
+                    expression,
+                    [surface_name],
+                )
+            )
+        for field_name in report_of_candidates:
+            getters.append(
+                lambda field_name=field_name: self._surface_integral_value(
+                    "area_weighted_avg",
+                    report_of=field_name,
+                    surface_names=[surface_name],
+                )
+            )
+
+        return self._first_numeric_result(
+            getters,
+            f"area-weighted {report_of} on {surface_name}",
         )
-        return self._extract_float(value)
+
+    def _reduction_expression_candidates(self, report_of: str) -> list[Any]:
+        if report_of == "pressure":
+            return [
+                VariableCatalog.PRESSURE,
+                VariableCatalog.STATIC_PRESSURE,
+                "StaticPressure",
+            ]
+        if report_of == "temperature":
+            return [
+                VariableCatalog.TEMPERATURE,
+                VariableCatalog.WALL_TEMPERATURE,
+                "StaticTemperature",
+                "WallTemperature",
+            ]
+
+        return [report_of]
+
+    def _surface_integral_field_candidates(self, report_of: str) -> list[str]:
+        if report_of == "pressure":
+            return ["pressure", "static-pressure", "absolute-pressure"]
+        if report_of == "temperature":
+            return ["temperature", "wall-temperature"]
+
+        return [report_of]
+
+    def _surface_integral_value(self, method_name: str, **kwargs) -> Any:
+        surface_integrals = self.solver_session.settings.results.report.surface_integrals
+        return self._call_surface_integral(surface_integrals, method_name, **kwargs)
 
     def _call_surface_integral(self, surface_integrals, method_name: str, **kwargs):
         """Call a surface-integral command across PyFluent naming variants."""
@@ -280,9 +327,25 @@ class PostProcessor:
         for candidate_name in method_names:
             method = getattr(surface_integrals, candidate_name, None)
             if method is not None:
-                return method(**kwargs)
+                value = method(**kwargs)
+                if value is not None:
+                    return value
 
         raise AttributeError(f"surface_integrals has no method for {method_name!r}")
+
+    def _first_numeric_result(
+        self,
+        getters: tuple[Callable[[], Any], ...] | list[Callable[[], Any]],
+        label: str,
+    ) -> float:
+        errors: list[str] = []
+        for getter in getters:
+            try:
+                return self._extract_float(getter())
+            except Exception as exc:
+                errors.append(str(exc))
+
+        raise ValueError(f"Could not compute {label}: {'; '.join(errors)}")
 
     def _extract_float(self, value: Any) -> float:
         if isinstance(value, bool):

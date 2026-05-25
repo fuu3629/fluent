@@ -81,3 +81,5 @@ if __name__ == "__main__":
         input("Fluent GUIを確認してください。終了するにはEnterを押してください: ")
         runner.close()
         raise
+    else:
+        runner.close()
