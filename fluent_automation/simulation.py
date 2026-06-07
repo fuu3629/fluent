@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from fluent_automation.config import GuiPauseConfig, SolverConfig, WatertightMeshConfig
 from fluent_automation.console import print_color
 from fluent_automation.post_processing import PostProcessor
@@ -20,6 +22,8 @@ class FluentSimulationRunner:
         self.current_session = None
 
     def run(self):
+        self._validate_inputs_before_fluent()
+
         meshing_session = WatertightMesher(
             config=self.mesh_config,
             pause_config=self.pause_config,
@@ -38,6 +42,18 @@ class FluentSimulationRunner:
         ).setup()
         PostProcessor(solver_session, self.solver_config).generate()
         return solver_session
+
+    def _validate_inputs_before_fluent(self) -> None:
+        """Fluent起動前に最低限の入力ファイル異常を検出する。"""
+
+        if self.mesh_config.geometry_file is None:
+            return
+
+        geometry_path = Path(self.mesh_config.geometry_file)
+        if not geometry_path.exists():
+            raise RuntimeError(f"Geometry file does not exist: {geometry_path}")
+        if geometry_path.is_file() and geometry_path.stat().st_size == 0:
+            raise RuntimeError(f"Geometry file is empty: {geometry_path}")
 
     def close(self) -> None:
         """現在接続しているFluent sessionを終了する。"""

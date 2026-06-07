@@ -188,6 +188,8 @@ class PostProcessingConfig:
     output_dir: str = "output"
     report_file_name: str = "thermal_report.md"
     metrics_file_name: str = "metrics.csv"
+    write_failure_metrics: bool = True
+    failure_penalty_value: float = 1.0e9
     save_case_data: bool = True
     case_data_file_name: str = "solution.cas.h5"
     contour_images: list[ContourImageSetting] = field(default_factory=lambda: [

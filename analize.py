@@ -7,6 +7,7 @@ from fluent_automation.config import (
     VelocityInletSetting,
     WatertightMeshConfig,
 )
+from fluent_automation.post_processing import write_failure_metrics
 from fluent_automation.simulation import FluentSimulationRunner
 
 
@@ -78,8 +79,9 @@ if __name__ == "__main__":
         runner.run()
     except Exception as exc:
         print(f"\nError: {exc}")
-        input("Fluent GUIを確認してください。終了するにはEnterを押してください: ")
+        metrics_path = write_failure_metrics(solver_config, str(exc))
+        if metrics_path is not None:
+            print(f"Failure metrics were written to: {metrics_path}")
         runner.close()
-        raise
     else:
         runner.close()

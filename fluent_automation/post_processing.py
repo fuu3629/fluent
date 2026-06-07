@@ -188,15 +188,14 @@ class PostProcessor:
 
     def _write_metrics_csv(self, metrics: dict[str, float]) -> Path:
         metrics_path = self.output_dir / self.config.metrics_file_name
-        with metrics_path.open("w", newline="", encoding="utf-8") as csv_file:
-            writer = csv.writer(csv_file)
-            writer.writerow(metrics.keys())
-            writer.writerow(metrics.values())
-
+        write_metrics_csv(metrics_path, metrics)
         return metrics_path
 
     def _compute_metrics(self) -> dict[str, float]:
-        metrics: dict[str, float] = {}
+        metrics: dict[str, float] = {
+            "valid_geometry": 1.0,
+            "simulation_success": 1.0,
+        }
 
         inlet = self.solver_config.velocity_inlet
         outlet = self.solver_config.pressure_outlet
@@ -306,7 +305,7 @@ class PostProcessor:
 
     def _surface_integral_field_candidates(self, report_of: str) -> list[str]:
         if report_of == "pressure":
-            return ["pressure", "static-pressure", "absolute-pressure"]
+            return ["pressure", "static-pressure"]
         if report_of == "temperature":
             return ["temperature", "wall-temperature"]
 
@@ -482,3 +481,64 @@ class PostProcessor:
             return f"- {label}: `{value}`"
         except Exception as exc:
             return f"- {label}: unavailable (`{exc}`)"
+
+
+def write_metrics_csv(metrics_path: Path, metrics: dict[str, float]) -> None:
+    """modeFRONTIERが読める1行形式のCSVを出力する。"""
+
+    metrics_path.parent.mkdir(parents=True, exist_ok=True)
+    with metrics_path.open("w", newline="", encoding="utf-8") as csv_file:
+        writer = csv.writer(csv_file)
+        writer.writerow(metrics.keys())
+        writer.writerow(metrics.values())
+
+
+def build_failure_metrics(
+    solver_config: SolverConfig,
+    reason: str,
+) -> dict[str, float]:
+    """解析不能な設計に対して、有限値のペナルティ結果を作る。"""
+
+    penalty = solver_config.post_processing.failure_penalty_value
+    inlet = solver_config.velocity_inlet
+    tin = inlet.temperature if inlet is not None and inlet.temperature is not None else 0.0
+
+    metrics: dict[str, float] = {
+        "valid_geometry": 0.0,
+        "simulation_success": 0.0,
+        "Tin": tin,
+        "Pin": penalty,
+        "Pout": 0.0,
+        "deltaP": penalty,
+    }
+
+    for index, wall_heat_flux in enumerate(solver_config.wall_heat_fluxes):
+        wall_name = wall_heat_flux.name
+        metrics[f"Tavg_{wall_name}"] = penalty
+        metrics[f"Area_{wall_name}"] = 0.0
+        metrics[f"Q_{wall_name}"] = 0.0
+        metrics[f"Rth_{wall_name}"] = penalty
+
+        if index == 0:
+            metrics["Tavg"] = penalty
+            metrics["Q"] = 0.0
+            metrics["Rth"] = penalty
+
+    return metrics
+
+
+def write_failure_metrics(
+    solver_config: SolverConfig,
+    reason: str,
+) -> Path | None:
+    """解析失敗時にmodeFRONTIER用のペナルティCSVを出力する。"""
+
+    config = solver_config.post_processing
+    if not config.enabled or not config.write_failure_metrics:
+        return None
+
+    output_dir = Path(config.output_dir).resolve()
+    metrics_path = output_dir / config.metrics_file_name
+    write_metrics_csv(metrics_path, build_failure_metrics(solver_config, reason))
+    (output_dir / "failure_reason.txt").write_text(reason + "\n", encoding="utf-8")
+    return metrics_path
